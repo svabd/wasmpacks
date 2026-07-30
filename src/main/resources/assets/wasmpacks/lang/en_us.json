@@ -1,0 +1,13 @@
+{
+  "itemGroup.wasmpacks": "Example Mod Tab",
+  "block.wasmpacks.example_block": "Example Block",
+  "item.wasmpacks.example_item": "Example Item",
+
+  "wasmpacks.configuration.title": "Wasm Packs Configs",
+  "wasmpacks.configuration.section.wasmpacks.common.toml": "Wasm Packs Configs",
+  "wasmpacks.configuration.section.wasmpacks.common.toml.title": "Wasm Packs Configs",
+  "wasmpacks.configuration.items": "Item List",
+  "wasmpacks.configuration.logDirtBlock": "Log Dirt Block",
+  "wasmpacks.configuration.magicNumberIntroduction": "Magic Number Text",
+  "wasmpacks.configuration.magicNumber": "Magic Number"
+}
