@@ -20,6 +20,9 @@ import net.sv_abd.wasmpacks.loader.EntryPointLoader;
 import net.sv_abd.wasmpacks.loader.SimpleBlockLoader;
 import net.sv_abd.wasmpacks.loader.SimpleItemLoader;
 import net.sv_abd.wasmpacks.loader.WasmCodeLoader;
+import net.sv_abd.wasmpacks.registry.SimpleRegistryApplier;
+
+import java.util.Map;
 
 /**
  * Main mod class for WasmPacks.
@@ -116,13 +119,74 @@ public class WasmPacks {
         // Register the entry point loader (JSON files)
         event.addListener(EntryPointLoader.ID, entryPointLoader);
 
-        // Register the simple block/item loaders (JSON files). NOTE: these only
-        // parse and cache definitions on every reload, same as the loaders above.
-        // Actually turning them into real Block/Item registry entries requires
-        // briefly unfreezing BLOCK/ITEM, which is only safe to do once, at world
-        // load — that consumption step is separate and not wired in yet.
+        // Register the simple block/item loaders (JSON files). These only parse
+        // and cache definitions on every reload; the trigger listener below turns
+        // that cached output into real Block/Item registry entries, but only once
+        // per server process (see SimpleRegistryApplier for why).
         event.addListener(SimpleBlockLoader.ID, simpleBlockLoader);
         event.addListener(SimpleItemLoader.ID, simpleItemLoader);
+
+        // Register a synthetic trigger listener that actually turns the parsed
+        // simple block/item definitions into real registry entries. This MUST
+        // run after both simple_* loaders (needs their parsed output) and
+        // BEFORE vanilla's tag/recipe/loot/advancement reload (which may
+        // reference our new ids by id, and would silently drop or hard-fail on
+        // unknown ones otherwise, since those load in this same reload batch).
+        // The actual "run before vanilla" ordering is set up further down,
+        // once this listener is registered (addDependency requires both sides
+        // to already be registered).
+        Identifier simpleRegistryApplierId = Identifier.fromNamespaceAndPath(MOD_ID, "simple_registry_applier");
+        event.addListener(
+                simpleRegistryApplierId,
+                new net.minecraft.server.packs.resources.SimplePreparableReloadListener<Void>() {
+                    @Override
+                    protected Void prepare(net.minecraft.server.packs.resources.ResourceManager manager,
+                                           net.minecraft.util.profiling.ProfilerFiller profiler) {
+                        return null; // no off-thread work needed
+                    }
+
+                    @Override
+                    protected void apply(Void prepared,
+                                         net.minecraft.server.packs.resources.ResourceManager manager,
+                                         net.minecraft.util.profiling.ProfilerFiller profiler) {
+                        SimpleRegistryApplier.apply(simpleBlockLoader, simpleItemLoader);
+                    }
+                }
+        );
+        event.addDependency(SimpleBlockLoader.ID, simpleRegistryApplierId);
+        event.addDependency(SimpleItemLoader.ID, simpleRegistryApplierId);
+
+        // There is no confirmed public constant for vanilla's tag/recipe/loot/
+        // advancement reload listener keys in this NeoForge version (an earlier
+        // attempt to reference a `VanillaServerListeners` helper failed to
+        // compile — it isn't part of the public API here). Instead, scan the
+        // listeners NeoForge has already registered by this point (vanilla's
+        // own listeners are pre-populated before this event reaches us) and add
+        // an explicit ordering edge against anything whose key looks
+        // tag/recipe/loot/advancement-related, so our block/item registration
+        // runs before content that might reference the new ids by id.
+        //
+        // RISK NOTE: this is a best-effort heuristic, not a verified mechanism.
+        // If it silently matches nothing (vanilla's keys don't contain these
+        // substrings in this version), the fallback is the documented default:
+        // we still run after vanilla, which likely means an ordering bug for
+        // the very first data pack load. Please verify the actual keys vanilla
+        // registers under by checking net.minecraft.server.ReloadableServerResources
+        // (or wherever this version builds the vanilla listener list) and swap
+        // this heuristic for exact keys if it doesn't line up.
+        for (Map.Entry<Identifier, net.minecraft.server.packs.resources.PreparableReloadListener> vanillaEntry
+                : event.getRegistry().entrySet()) {
+            String path = vanillaEntry.getKey().getPath().toLowerCase(java.util.Locale.ROOT);
+            if (path.contains("tag") || path.contains("recipe") || path.contains("loot") || path.contains("advancement")) {
+                try {
+                    event.addDependency(simpleRegistryApplierId, vanillaEntry.getKey());
+                    LOGGER.debug("[WasmPacks] Ordered simple_registry_applier before {}", vanillaEntry.getKey());
+                } catch (IllegalArgumentException ex) {
+                    LOGGER.warn("[WasmPacks] Could not add ordering dependency against {}: {}",
+                            vanillaEntry.getKey(), ex.getMessage());
+                }
+            }
+        }
 
         // Register a synthetic reload listener that dispatches entry points to
         // their type handlers. It runs after both loaders complete.
