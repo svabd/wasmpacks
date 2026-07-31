@@ -17,6 +17,8 @@ import net.sv_abd.wasmpacks.entrypoint.EntryPointDispatcher;
 import net.sv_abd.wasmpacks.entrypoint.EntryPointTypeRegistry;
 import net.sv_abd.wasmpacks.entrypoint.McFunctionEntryPointType;
 import net.sv_abd.wasmpacks.loader.EntryPointLoader;
+import net.sv_abd.wasmpacks.loader.SimpleBlockLoader;
+import net.sv_abd.wasmpacks.loader.SimpleItemLoader;
 import net.sv_abd.wasmpacks.loader.WasmCodeLoader;
 
 /**
@@ -70,6 +72,8 @@ public class WasmPacks {
     // --- Core loaders (singletons; reused across reloads) ---
     private final WasmCodeLoader wasmCodeLoader = new WasmCodeLoader();
     private final EntryPointLoader entryPointLoader = new EntryPointLoader();
+    private final SimpleBlockLoader simpleBlockLoader = new SimpleBlockLoader();
+    private final SimpleItemLoader simpleItemLoader = new SimpleItemLoader();
 
     // --- Built-in entry point type handler ---
     private final McFunctionEntryPointType mcFunctionType = new McFunctionEntryPointType();
@@ -112,6 +116,14 @@ public class WasmPacks {
         // Register the entry point loader (JSON files)
         event.addListener(EntryPointLoader.ID, entryPointLoader);
 
+        // Register the simple block/item loaders (JSON files). NOTE: these only
+        // parse and cache definitions on every reload, same as the loaders above.
+        // Actually turning them into real Block/Item registry entries requires
+        // briefly unfreezing BLOCK/ITEM, which is only safe to do once, at world
+        // load — that consumption step is separate and not wired in yet.
+        event.addListener(SimpleBlockLoader.ID, simpleBlockLoader);
+        event.addListener(SimpleItemLoader.ID, simpleItemLoader);
+
         // Register a synthetic reload listener that dispatches entry points to
         // their type handlers. It runs after both loaders complete.
         // We use an anonymous SimplePreparableReloadListener as a trigger.
@@ -133,7 +145,7 @@ public class WasmPacks {
                 }
         );
 
-        LOGGER.info("[WasmPacks] Registered wasm_code, entry_points, and dispatcher reload listeners");
+        LOGGER.info("[WasmPacks] Registered wasm_code, entry_points, simple_blocks, simple_items, and dispatcher reload listeners");
     }
 
     @SubscribeEvent

@@ -14,8 +14,10 @@ import net.sv_abd.wasmpacks.WasmPacks;
 
 import java.io.IOException;
 import java.io.Reader;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -76,8 +78,8 @@ public class EntryPointLoader extends SimplePreparableReloadListener<Map<Identif
                 EntryPointDefinition def = parseDefinition(fileId, json);
                 if (def != null) {
                     result.put(entryPointId, def);
-                    WasmPacks.LOGGER.debug("[WasmPacks] Loaded entry point: {} -> {}#{} (type={})",
-                            entryPointId, def.wasmModule(), def.export(), def.type());
+                    WasmPacks.LOGGER.debug("[WasmPacks] Loaded entry point: {} -> {}#{} (type={}, args={})",
+                            entryPointId, def.wasmModule(), def.export(), def.type(), def.args());
                 }
             } catch (IOException e) {
                 WasmPacks.LOGGER.error("[WasmPacks] Failed to read entry point file {}: {}", fileId, e.getMessage());
@@ -136,7 +138,29 @@ public class EntryPointLoader extends SimplePreparableReloadListener<Map<Identif
             return null;
         }
 
-        return new EntryPointDefinition(wasmModuleId, export, type);
+        // --- Optional: parse args array ---
+        List<String> args = new ArrayList<>();
+        if (json.has("args")) {
+            JsonElement argsEl = json.get("args");
+            if (!argsEl.isJsonArray()) {
+                WasmPacks.LOGGER.error("[WasmPacks] Entry point {} has non-array 'args' field", fileId);
+                return null;
+            }
+            for (JsonElement el : argsEl.getAsJsonArray()) {
+                if (!el.isJsonPrimitive() || !el.getAsJsonPrimitive().isString()) {
+                    WasmPacks.LOGGER.error("[WasmPacks] Entry point {} has non-string element in 'args'", fileId);
+                    return null;
+                }
+                String argName = el.getAsString();
+                if (argName.isBlank()) {
+                    WasmPacks.LOGGER.error("[WasmPacks] Entry point {} has blank argument name in 'args'", fileId);
+                    return null;
+                }
+                args.add(argName);
+            }
+        }
+
+        return new EntryPointDefinition(wasmModuleId, export, type, args);
     }
 
     // -------------------------------------------------------------------------
