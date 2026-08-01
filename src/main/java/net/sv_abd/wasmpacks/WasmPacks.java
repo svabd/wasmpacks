@@ -11,6 +11,9 @@ import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.AddServerReloadListenersEvent;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
+import net.neoforged.neoforge.network.event.RegisterConfigurationTasksEvent;
+import net.neoforged.neoforge.network.registration.PayloadRegistrar;
+import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import net.sv_abd.wasmpacks.debug.WasmPacksDebugCommand;
@@ -21,6 +24,9 @@ import net.sv_abd.wasmpacks.loader.EntryPointLoader;
 import net.sv_abd.wasmpacks.loader.SimpleBlockLoader;
 import net.sv_abd.wasmpacks.loader.SimpleItemLoader;
 import net.sv_abd.wasmpacks.loader.WasmCodeLoader;
+import net.sv_abd.wasmpacks.network.WasmPacksSyncPayload;
+import net.sv_abd.wasmpacks.network.WasmPacksSyncPayloadHandler;
+import net.sv_abd.wasmpacks.network.WasmPacksSyncTask;
 import net.sv_abd.wasmpacks.registry.SimpleRegistryApplier;
 
 import java.util.Map;
@@ -84,6 +90,16 @@ public class WasmPacks {
 
     public WasmPacks(IEventBus modEventBus, ModContainer modContainer) {
         modEventBus.addListener(this::commonSetup);
+        // Payload *registration* (as opposed to configuration-task registration,
+        // which is a per-connection game event further below) happens once, on
+        // the mod bus, same lifecycle stage as everything else in this constructor.
+        modEventBus.addListener(this::registerPayloadHandlers);
+        // RegisterConfigurationTasksEvent is a mod-bus event too (NOT the game
+        // event bus — registering it via NeoForge.EVENT_BUS.register(this) below
+        // threw IllegalArgumentException: "... has @SubscribeEvent annotation,
+        // but takes an argument that is not valid for this bus" at startup),
+        // so it's wired up here explicitly instead of via @SubscribeEvent.
+        modEventBus.addListener(this::onRegisterConfigurationTasks);
 
         // Register ourselves for server-side game events
         NeoForge.EVENT_BUS.register(this);
@@ -211,6 +227,48 @@ public class WasmPacks {
         );
 
         LOGGER.info("[WasmPacks] Registered wasm_code, entry_points, simple_blocks, simple_items, and dispatcher reload listeners");
+    }
+
+    // -------------------------------------------------------------------------
+    // Multiplayer sync: ship simple block/item definitions to connecting
+    // clients during the configuration phase, before they can enter the play
+    // state. See WasmPacksSyncPayload/WasmPacksSyncTask for why this timing
+    // matters and SimpleRegistryApplier for why ordering matters.
+    // -------------------------------------------------------------------------
+
+    /**
+     * Registers the {@link WasmPacksSyncPayload} codec/handler. Fired once, on
+     * the mod bus, at the same lifecycle stage as everything else registered
+     * in the constructor.
+     *
+     * RISK NOTE: PayloadRegistrar's exact method name for a configuration-phase,
+     * server-to-client-only payload (here assumed to be
+     * {@code configurationToClient}) has not been verified against real 26.2
+     * NeoForge sources — check NeoForge's own networking primer if this
+     * doesn't compile. The payload/codec/handler classes underneath are
+     * unaffected either way.
+     */
+    private void registerPayloadHandlers(RegisterPayloadHandlersEvent event) {
+        PayloadRegistrar registrar = event.registrar(MOD_ID).versioned("1");
+        registrar.configurationToClient(
+                WasmPacksSyncPayload.TYPE,
+                WasmPacksSyncPayload.CODEC,
+                WasmPacksSyncPayloadHandler::handle);
+        LOGGER.debug("[WasmPacks] Registered sync payload handler");
+    }
+
+    /**
+     * Adds {@link WasmPacksSyncTask} to every connecting client's
+     * configuration-phase task list.
+     * <p>
+     * NOT annotated {@code @SubscribeEvent} — {@code RegisterConfigurationTasksEvent}
+     * is a mod-bus event, not a {@code NeoForge.EVENT_BUS} one (confirmed by an
+     * {@code IllegalArgumentException} at startup when it was registered that
+     * way). Wired up via {@code modEventBus.addListener(...)} in the
+     * constructor instead, same as {@link #registerPayloadHandlers}.
+     */
+    private void onRegisterConfigurationTasks(RegisterConfigurationTasksEvent event) {
+        event.register(new WasmPacksSyncTask());
     }
 
     @SubscribeEvent

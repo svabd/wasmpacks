@@ -1,6 +1,7 @@
 package net.sv_abd.wasmpacks.registry;
 
 import net.minecraft.core.Holder;
+import net.minecraft.core.IdMapper;
 import net.minecraft.core.Registry;
 import net.minecraft.core.component.DataComponentMap;
 import net.minecraft.core.component.DataComponents;
@@ -15,66 +16,142 @@ import net.minecraft.world.item.Rarity;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.MapColor;
 import net.sv_abd.wasmpacks.WasmPacks;
 import net.sv_abd.wasmpacks.loader.SimpleBlockDefinition;
 import net.sv_abd.wasmpacks.loader.SimpleBlockLoader;
 import net.sv_abd.wasmpacks.loader.SimpleItemDefinition;
 import net.sv_abd.wasmpacks.loader.SimpleItemLoader;
+import net.sv_abd.wasmpacks.mixin.BlockStateIdMapperAccessor;
 import net.sv_abd.wasmpacks.mixin.MappedRegistryAccessor;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Turns parsed {@link SimpleBlockDefinition}/{@link SimpleItemDefinition}
  * entries into real {@link Block}/{@link Item} instances in
- * {@link BuiltInRegistries#BLOCK}/{@link BuiltInRegistries#ITEM}.
+ * {@link BuiltInRegistries#BLOCK}/{@link BuiltInRegistries#ITEM}, AND gives
+ * every resulting {@link BlockState} a network id via
+ * {@link BlockStateIdMapperAccessor}.
  *
- * BLOCK and ITEM are frozen during mod loading and normally reject writes
- * after that point (see {@link MappedRegistryAccessor} for why/how we can
- * still write to them). We only ever want to do this ONCE per server
- * process — see the class doc on {@link #apply} for why.
+ * <h2>Determinism is the whole game here</h2>
+ * Both {@code BuiltInRegistries.BLOCK}'s registration order and
+ * {@code Block.BLOCK_STATE_REGISTRY}'s id-assignment order matter for network
+ * compatibility: every process that will exchange packets referencing these
+ * blocks — the authoritative server AND every connecting client — must call
+ * {@link #applyOrdered} with the exact same definitions in the exact same
+ * order, or the same logical block will resolve to a different int on
+ * different machines and packet
+ * en/decoding will fail exactly like the crash this class exists to fix.
+ * <p>
+ * For that reason:
+ * <ul>
+ *   <li>{@link #apply(SimpleBlockLoader, SimpleItemLoader)} — the server-side
+ *       entry point — sorts entries by {@code Identifier.toString()} before
+ *       registering, rather than relying on {@code HashMap} iteration order
+ *       (which is not guaranteed stable across JVMs/processes).</li>
+ *   <li>The same sorted lists are cached ({@link #getSortedBlocks()} /
+ *       {@link #getSortedItems()}) so the multiplayer sync payload can be
+ *       built from the EXACT list that was actually registered, not
+ *       re-derived separately.</li>
+ *   <li>{@link #applyOrdered} is the method clients call (with definitions
+ *       decoded from the sync payload, already in server order) — it performs
+ *       no sorting of its own, it trusts the order it's given.</li>
+ * </ul>
  *
- * WHAT'S NOT DONE HERE: this only registers the server-side Block/Item
- * objects (behavior, hardness, stack size, etc.). It does NOT give them a
- * client-side appearance. Data packs cannot ship textures or models, so a
- * simple block/item registered by this class will render as the
- * missing-texture checkerboard until a client-side step generates a
- * synthetic block-state/model in memory that points at the existing texture
- * named in {@code def.texture()} — that's a separate piece of work (model
- * baking hooks, not registry hooks) and is intentionally left for a
- * follow-up rather than guessed at here.
+ * <h2>Why one guard is shared across server and client call sites</h2>
+ * In singleplayer, the integrated server and its "client" share a single JVM
+ * and a single {@code BuiltInRegistries.BLOCK} instance. If the server-side
+ * reload-triggered {@link #apply} call registers these blocks, and the
+ * client-side sync-payload handler then also calls {@link #applyOrdered} for
+ * the same definitions, the second call would throw on duplicate
+ * registration. {@link #APPLIED} is a single process-wide guard specifically
+ * so this can't double-fire — whichever call site runs first (in practice,
+ * the server-side one, since it runs before any configuration task can be
+ * sent) wins, and the other silently no-ops. On a real dedicated server +
+ * remote client, these are two separate JVMs with two separate
+ * {@code AtomicBoolean}s, so each side still runs its own registration
+ * exactly once, independently.
  */
 public final class SimpleRegistryApplier {
 
     private SimpleRegistryApplier() {}
 
-    /**
-     * Ensures the unfreeze/register/refreeze cycle only ever runs once per
-     * server process. Block/Item IDs get baked into world saves and synced
-     * to clients at login; adding or removing entries between sessions is
-     * explicitly out of scope (see design discussion — "no mid-session
-     * add/remove", extended here to "no mid-process re-registration either").
-     * On a later /reload, this listener's apply() will fire again (same as
-     * every other reload listener), but we detect that and skip, rather
-     * than attempt to re-register (which would throw on duplicate ids) or
-     * silently ignore data pack changes without saying so.
-     */
+    /** See class doc — shared across server-local and client-sync call sites. */
     private static final AtomicBoolean APPLIED = new AtomicBoolean(false);
 
+    /**
+     * The exact sorted definition lists last registered by THIS process,
+     * whether via {@link #apply} or {@link #applyOrdered} directly. Null
+     * until the first successful call. Used by the server to build the
+     * multiplayer sync payload from the same data it actually registered,
+     * rather than re-deriving it and risking drift.
+     */
+    private static volatile List<Map.Entry<Identifier, SimpleBlockDefinition>> lastSortedBlocks;
+    private static volatile List<Map.Entry<Identifier, SimpleItemDefinition>> lastSortedItems;
+
+    // -------------------------------------------------------------------------
+    // Server-side entry point: sorts, then delegates to applyOrdered
+    // -------------------------------------------------------------------------
+
+    /**
+     * Server-side entry point. Reads the loaders' current definitions,
+     * deterministically sorts them by {@code Identifier.toString()}, and
+     * registers them. This is the AUTHORITATIVE ordering — whatever this
+     * method registers here is also what gets shipped to clients via the
+     * sync payload (see {@link #getSortedBlocks()}/{@link #getSortedItems()}),
+     * so clients end up with byte-for-byte the same order.
+     */
     public static void apply(SimpleBlockLoader blockLoader, SimpleItemLoader itemLoader) {
+        List<Map.Entry<Identifier, SimpleBlockDefinition>> sortedBlocks =
+                new ArrayList<>(blockLoader.getDefinitions().entrySet());
+        sortedBlocks.sort(Comparator.comparing(e -> e.getKey().toString()));
+
+        List<Map.Entry<Identifier, SimpleItemDefinition>> sortedItems =
+                new ArrayList<>(itemLoader.getDefinitions().entrySet());
+        sortedItems.sort(Comparator.comparing(e -> e.getKey().toString()));
+
+        // Cache regardless of whether applyOrdered actually registers anything
+        // this call (APPLIED may already be tripped) — the sync payload should
+        // reflect what's really live in the registries right now.
+        lastSortedBlocks = sortedBlocks;
+        lastSortedItems = sortedItems;
+
+        applyOrdered(sortedBlocks, sortedItems);
+    }
+
+    // -------------------------------------------------------------------------
+    // Shared, side-agnostic registration — called by server (above) AND by
+    // the client's sync-payload handler with server-supplied, already-ordered
+    // definitions.
+    // -------------------------------------------------------------------------
+
+    /**
+     * Registers the given definitions IN THE ORDER GIVEN. Callers are
+     * responsible for ensuring that order is deterministic and, for
+     * multiplayer correctness, identical to whatever order the authoritative
+     * server used. Guarded by {@link #APPLIED} — see class doc.
+     */
+    public static void applyOrdered(List<Map.Entry<Identifier, SimpleBlockDefinition>> blocks,
+                                     List<Map.Entry<Identifier, SimpleItemDefinition>> items) {
         if (!APPLIED.compareAndSet(false, true)) {
             WasmPacks.LOGGER.warn(
-                    "[WasmPacks] Simple block/item registration already ran for this server process. "
+                    "[WasmPacks] Simple block/item registration already ran for this process. "
                             + "Data pack changes to simple_blocks/simple_items require a full restart to take "
                             + "effect, not just /reload. Skipping.");
             return;
         }
 
-        Map<Identifier, SimpleBlockDefinition> blocks = blockLoader.getDefinitions();
-        Map<Identifier, SimpleItemDefinition> items = itemLoader.getDefinitions();
+        // Also cache here, in case applyOrdered is ever called directly
+        // (e.g. from the client sync handler) without going through apply().
+        lastSortedBlocks = blocks;
+        lastSortedItems = items;
 
         if (blocks.isEmpty() && items.isEmpty()) {
             WasmPacks.LOGGER.info("[WasmPacks] No simple blocks/items declared, nothing to register.");
@@ -88,13 +165,13 @@ public final class SimpleRegistryApplier {
         itemRegistry.wasmpacks$setFrozen(false);
         try {
             int registeredBlocks = 0;
-            for (Map.Entry<Identifier, SimpleBlockDefinition> entry : blocks.entrySet()) {
+            for (Map.Entry<Identifier, SimpleBlockDefinition> entry : blocks) {
                 if (registerBlock(entry.getKey(), entry.getValue())) {
                     registeredBlocks++;
                 }
             }
             int registeredItems = 0;
-            for (Map.Entry<Identifier, SimpleItemDefinition> entry : items.entrySet()) {
+            for (Map.Entry<Identifier, SimpleItemDefinition> entry : items) {
                 if (registerItem(entry.getKey(), entry.getValue())) {
                     registeredItems++;
                 }
@@ -103,12 +180,29 @@ public final class SimpleRegistryApplier {
                     "[WasmPacks] Simple registry pass complete: {} block(s), {} standalone item(s) registered.",
                     registeredBlocks, registeredItems);
         } finally {
-            // Always re-freeze even if something above threw, so a bad definition
-            // can't leave BLOCK/ITEM permanently writable for the rest of the run.
             blockRegistry.wasmpacks$setFrozen(true);
             itemRegistry.wasmpacks$setFrozen(true);
         }
     }
+
+    /**
+     * The exact sorted block definitions last registered by this process.
+     * Used by the server to build the multiplayer sync payload. May be null
+     * if nothing has been registered yet.
+     */
+    public static List<Map.Entry<Identifier, SimpleBlockDefinition>> getSortedBlocks() {
+        return lastSortedBlocks;
+    }
+
+    /** See {@link #getSortedBlocks()}. */
+    public static List<Map.Entry<Identifier, SimpleItemDefinition>> getSortedItems() {
+        return lastSortedItems;
+    }
+
+    // -------------------------------------------------------------------------
+    // Per-block/item registration (unchanged from the original single-registry
+    // version, aside from the added block-state id mapper step)
+    // -------------------------------------------------------------------------
 
     /** Returns true if the block (and its BlockItem, if requested) registered successfully. */
     private static boolean registerBlock(Identifier id, SimpleBlockDefinition def) {
@@ -116,10 +210,6 @@ public final class SimpleRegistryApplier {
             SoundType sound = SimpleRegistryResolver.resolveSound(def.sound());
             MapColor mapColor = SimpleRegistryResolver.resolveMapColor(def.mapColor());
 
-            // Since MC 1.21.2, Block/Item construction requires the registry key to be
-            // set on Properties BEFORE construction (Properties#setId) — omitting this
-            // throws NullPointerException("Block/Item id not set"). See NeoForge's 1.21.2
-            // migration primer for the exact pattern this mirrors.
             ResourceKey<@NotNull Block> blockKey = ResourceKey.create(Registries.BLOCK, id);
 
             BlockBehaviour.Properties props = BlockBehaviour.Properties.of()
@@ -134,7 +224,27 @@ public final class SimpleRegistryApplier {
 
             Block block = new Block(props);
             Registry.register(BuiltInRegistries.BLOCK, blockKey, block);
-            WasmPacks.LOGGER.debug("[WasmPacks] Registered simple block: {}", id);
+
+            // NEW: give every possible state of this block a network id. Without
+            // this, BuiltInRegistries.BLOCK knows the block, but any packet
+            // encoding/decoding one of its BlockStates (e.g. block_update) has
+            // no id to serialize it as, and throws EncoderException/
+            // DecoderException. See BlockStateIdMapperAccessor for details.
+            //
+            // Iterated via getStateDefinition().getPossibleStates() rather than
+            // assuming "just the default state" — simple blocks have no custom
+            // Property<T> today, so this is currently always exactly one state,
+            // but stays correct if that changes later.
+            IdMapper<BlockState> stateIds = BlockStateIdMapperAccessor.wasmpacks$getBlockStateRegistry();
+            int statesAdded = 0;
+            for (BlockState state : block.getStateDefinition().getPossibleStates()) {
+                stateIds.add(state);
+                statesAdded++;
+            }
+
+            WasmPacks.LOGGER.debug(
+                    "[WasmPacks] Registered simple block: {} ({} block state(s) assigned network ids)",
+                    id, statesAdded);
 
             if (def.blockItem()) {
                 ResourceKey<@NotNull Item> itemKey = ResourceKey.create(Registries.ITEM, id);
@@ -143,17 +253,11 @@ public final class SimpleRegistryApplier {
                         .setId(itemKey);
                 BlockItem blockItem = new BlockItem(block, itemProps);
                 Registry.register(BuiltInRegistries.ITEM, itemKey, blockItem);
-                // See bindItemComponents() doc: the normal component-binding pipeline
-                // runs before our reload listener registers anything, so it never
-                // picks these up on its own — bind manually. BlockItems get plain
-                // defaults (stack 64, no durability, common rarity, not fire-resistant)
-                // since simple_blocks JSON doesn't currently expose these for the item side.
                 bindItemComponents(blockItem, id, "block", 64, 0, Rarity.COMMON);
                 WasmPacks.LOGGER.debug("[WasmPacks] Registered auto BlockItem for: {}", id);
             }
             return true;
         } catch (Exception e) {
-            // One bad/colliding definition should not abort the whole registration pass.
             WasmPacks.LOGGER.error("[WasmPacks] Failed to register simple block {}: {}", id, e.getMessage());
             return false;
         }
@@ -162,8 +266,6 @@ public final class SimpleRegistryApplier {
     private static boolean registerItem(Identifier id, SimpleItemDefinition def) {
         try {
             if (BuiltInRegistries.ITEM.containsKey(id)) {
-                // Most likely a simple_items entry colliding with an auto-generated
-                // BlockItem of the same id, or with vanilla/another mod's item.
                 WasmPacks.LOGGER.error(
                         "[WasmPacks] Simple item {} collides with an already-registered item, skipping.", id);
                 return false;
@@ -193,42 +295,6 @@ public final class SimpleRegistryApplier {
         }
     }
 
-    /**
-     * Manually binds the item's {@link DataComponentMap} onto its registry
-     * {@link Holder.Reference}, bypassing vanilla's normal pending-initializer
-     * pipeline.
-     *
-     * WHY THIS IS NEEDED: Item's constructor doesn't bind components directly —
-     * it stashes a pending initializer into BuiltInRegistries.DATA_COMPONENT_INITIALIZERS,
-     * which ReloadableServerResources later applies via
-     * updateComponentsAndStaticRegistryTags() -> this.newComponents.forEach(...).
-     * That `newComponents` list is built when ReloadableServerResources itself is
-     * constructed, BEFORE our reload listener runs and registers anything — so
-     * our items' pending initializers are never in the batch that gets applied,
-     * and Holder.Reference#components() would otherwise throw
-     * "Components not bound yet" the moment anything reads it (which NeoForge's
-     * own startup code does, unconditionally, for every item).
-     *
-     * We start from DataComponents.COMMON_ITEM_COMPONENTS (the same base every
-     * normal item gets via Item.Properties()'s default componentInitializer),
-     * then layer on ITEM_NAME/ITEM_MODEL (which is what actually makes the item
-     * display a name at all — without ITEM_NAME bound, the item has no name
-     * component whatsoever, which renders as blank, not as a raw translation key)
-     * and the stack size/durability/rarity we already exposed via JSON.
-     *
-     * RISK NOTE: none of this is verified against actual 26.2 sources beyond
-     * what's been confirmed through real compile errors and behavior reports so
-     * far. Failure here is caught and logged, not fatal to the overall
-     * registration pass — but an item that fails to bind will likely still show
-     * blank/wrong until corrected.
-     */
-    /**
-     * Inlined equivalent of vanilla's Util.makeDescriptionId(type, id), which
-     * has been "type + '.' + namespace + '.' + path.replace('/', '.')" for a
-     * very long time. Inlined rather than importing Util directly, since we
-     * don't yet know which package it lives in for this MC version (an
-     * earlier attempt to import net.minecraft.Util failed to resolve).
-     */
     private static String makeDescriptionId(String type, Identifier id) {
         return type + "." + id.getNamespace() + "." + id.getPath().replace('/', '.');
     }
