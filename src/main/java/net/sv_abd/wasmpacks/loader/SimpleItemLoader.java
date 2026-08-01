@@ -11,6 +11,7 @@ import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.SimplePreparableReloadListener;
 import net.minecraft.util.profiling.ProfilerFiller;
 import net.sv_abd.wasmpacks.WasmPacks;
+import org.jetbrains.annotations.NotNull;
 
 import java.io.IOException;
 import java.io.Reader;
@@ -31,7 +32,7 @@ import java.util.Set;
  * are declared here. See {@link SimpleBlockLoader} for the same "resolved
  * once at world load, not per /reload" caveat — it applies equally here.
  */
-public class SimpleItemLoader extends SimplePreparableReloadListener<Map<Identifier, SimpleItemDefinition>> {
+public class SimpleItemLoader extends SimplePreparableReloadListener<@NotNull Map<Identifier, SimpleItemDefinition>> {
 
     public static final Identifier ID = Identifier.fromNamespaceAndPath(WasmPacks.MOD_ID, "simple_item_loader");
 
@@ -55,7 +56,7 @@ public class SimpleItemLoader extends SimplePreparableReloadListener<Map<Identif
     // -------------------------------------------------------------------------
 
     @Override
-    protected Map<Identifier, SimpleItemDefinition> prepare(ResourceManager manager, ProfilerFiller profiler) {
+    protected Map<Identifier, SimpleItemDefinition> prepare(ResourceManager manager, @NotNull ProfilerFiller profiler) {
         Map<Identifier, SimpleItemDefinition> result = new HashMap<>();
 
         Map<Identifier, Resource> resources = manager.listResources(
@@ -97,7 +98,7 @@ public class SimpleItemLoader extends SimplePreparableReloadListener<Map<Identif
     }
 
     @Override
-    protected void apply(Map<Identifier, SimpleItemDefinition> prepared, ResourceManager manager, ProfilerFiller profiler) {
+    protected void apply(Map<Identifier, SimpleItemDefinition> prepared, @NotNull ResourceManager manager, @NotNull ProfilerFiller profiler) {
         this.definitions = Collections.unmodifiableMap(prepared);
         WasmPacks.LOGGER.info("[WasmPacks] Applied {} simple item definition(s)", this.definitions.size());
     }

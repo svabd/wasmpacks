@@ -42,7 +42,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * client-side appearance. Data packs cannot ship textures or models, so a
  * simple block/item registered by this class will render as the
  * missing-texture checkerboard until a client-side step generates a
- * synthetic blockstate/model in memory that points at the existing texture
+ * synthetic block-state/model in memory that points at the existing texture
  * named in {@code def.texture()} — that's a separate piece of work (model
  * baking hooks, not registry hooks) and is intentionally left for a
  * follow-up rather than guessed at here.
@@ -120,7 +120,7 @@ public final class SimpleRegistryApplier {
             // set on Properties BEFORE construction (Properties#setId) — omitting this
             // throws NullPointerException("Block/Item id not set"). See NeoForge's 1.21.2
             // migration primer for the exact pattern this mirrors.
-            ResourceKey<Block> blockKey = ResourceKey.create(Registries.BLOCK, id);
+            ResourceKey<@NotNull Block> blockKey = ResourceKey.create(Registries.BLOCK, id);
 
             BlockBehaviour.Properties props = BlockBehaviour.Properties.of()
                     .setId(blockKey)
@@ -137,7 +137,7 @@ public final class SimpleRegistryApplier {
             WasmPacks.LOGGER.debug("[WasmPacks] Registered simple block: {}", id);
 
             if (def.blockItem()) {
-                ResourceKey<Item> itemKey = ResourceKey.create(Registries.ITEM, id);
+                ResourceKey<@NotNull Item> itemKey = ResourceKey.create(Registries.ITEM, id);
                 Item.Properties itemProps = new Item.Properties()
                         .useBlockDescriptionPrefix()
                         .setId(itemKey);
@@ -146,7 +146,7 @@ public final class SimpleRegistryApplier {
                 // See bindItemComponents() doc: the normal component-binding pipeline
                 // runs before our reload listener registers anything, so it never
                 // picks these up on its own — bind manually. BlockItems get plain
-                // defaults (stack 64, no durability, common rarity, not fire resistant)
+                // defaults (stack 64, no durability, common rarity, not fire-resistant)
                 // since simple_blocks JSON doesn't currently expose these for the item side.
                 bindItemComponents(blockItem, id, "block", 64, 0, Rarity.COMMON);
                 WasmPacks.LOGGER.debug("[WasmPacks] Registered auto BlockItem for: {}", id);
@@ -236,8 +236,8 @@ public final class SimpleRegistryApplier {
     private static void bindItemComponents(Item item, Identifier id, String descriptionPrefix,
                                             int maxStackSize, int maxDurability, Rarity rarity) {
         try {
-            Holder<Item> holder = BuiltInRegistries.ITEM.wrapAsHolder(item);
-            if (!(holder instanceof Holder.Reference<Item> ref)) {
+            Holder<@NotNull Item> holder = BuiltInRegistries.ITEM.wrapAsHolder(item);
+            if (!(holder instanceof Holder.Reference<@NotNull Item> ref)) {
                 WasmPacks.LOGGER.warn(
                         "[WasmPacks] Item holder for {} is not a Holder.Reference, cannot bind components", item);
                 return;

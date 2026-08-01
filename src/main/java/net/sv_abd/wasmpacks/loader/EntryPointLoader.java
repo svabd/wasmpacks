@@ -11,6 +11,7 @@ import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.SimplePreparableReloadListener;
 import net.minecraft.util.profiling.ProfilerFiller;
 import net.sv_abd.wasmpacks.WasmPacks;
+import org.jetbrains.annotations.NotNull;
 
 import java.io.IOException;
 import java.io.Reader;
@@ -33,7 +34,7 @@ import java.util.Map;
  * export function to invoke. The {@code type} field routes them to the correct
  * {@link net.sv_abd.wasmpacks.entrypoint.IEntryPointType} handler.
  */
-public class EntryPointLoader extends SimplePreparableReloadListener<Map<Identifier, EntryPointDefinition>> {
+public class EntryPointLoader extends SimplePreparableReloadListener<@NotNull Map<Identifier, EntryPointDefinition>> {
 
     public static final Identifier ID = Identifier.fromNamespaceAndPath(WasmPacks.MOD_ID, "entry_point_loader");
 
@@ -50,7 +51,7 @@ public class EntryPointLoader extends SimplePreparableReloadListener<Map<Identif
     // -------------------------------------------------------------------------
 
     @Override
-    protected Map<Identifier, EntryPointDefinition> prepare(ResourceManager manager, ProfilerFiller profiler) {
+    protected Map<Identifier, EntryPointDefinition> prepare(ResourceManager manager, @NotNull ProfilerFiller profiler) {
         Map<Identifier, EntryPointDefinition> result = new HashMap<>();
 
         Map<Identifier, Resource> resources = manager.listResources(
@@ -93,7 +94,7 @@ public class EntryPointLoader extends SimplePreparableReloadListener<Map<Identif
     }
 
     @Override
-    protected void apply(Map<Identifier, EntryPointDefinition> prepared, ResourceManager manager, ProfilerFiller profiler) {
+    protected void apply(Map<Identifier, EntryPointDefinition> prepared, @NotNull ResourceManager manager, @NotNull ProfilerFiller profiler) {
         this.entryPoints = Collections.unmodifiableMap(prepared);
         WasmPacks.LOGGER.info("[WasmPacks] Applied {} entry point(s)", this.entryPoints.size());
     }

@@ -27,7 +27,7 @@ import java.util.Locale;
  * reorganized into a registry-backed concept as of MC 1.21.2, so a static
  * enum-constant lookup may not even apply anymore. We try the legacy
  * enum-constant shape first (cheap, safe to attempt) and fall back to
- * COMMON with a warning if that fails — do not block block/item registration
+ * COMMON with a warning if that fails — do not block/item registration
  * on getting rarity exactly right.
  */
 public final class SimpleRegistryResolver {

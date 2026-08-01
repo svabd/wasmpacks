@@ -8,6 +8,7 @@ import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.util.profiling.ProfilerFiller;
 import net.minecraft.server.packs.resources.SimplePreparableReloadListener;
 import net.sv_abd.wasmpacks.WasmPacks;
+import org.jetbrains.annotations.NotNull;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -21,14 +22,14 @@ import java.util.Map;
  *
  * Each file is parsed into a Chicory WasmModule (validation + type-checking
  * happens here during the off-thread prepare phase). The resulting map is
- * keyed by a Identifier derived from the file path, e.g.:
+ * keyed by an Identifier derived from the file path, e.g.:
  *   data/mypack/wasmpacks/wasm_code/myfunctions.wasm
  *     -> Identifier("mypack", "myfunctions")
  *
  * Modules are NOT instantiated here; instantiation happens per-invocation
  * inside the entry point layer so each call gets its own isolated linear memory.
  */
-public class WasmCodeLoader extends SimplePreparableReloadListener<Map<Identifier, LoadedWasmModule>> {
+public class WasmCodeLoader extends SimplePreparableReloadListener<@NotNull Map<Identifier, LoadedWasmModule>> {
 
     public static final Identifier ID = Identifier.fromNamespaceAndPath(WasmPacks.MOD_ID, "wasm_code_loader");
 
@@ -48,7 +49,7 @@ public class WasmCodeLoader extends SimplePreparableReloadListener<Map<Identifie
      * and skip the offending file rather than crashing the whole reload.
      */
     @Override
-    protected Map<Identifier, LoadedWasmModule> prepare(ResourceManager manager, ProfilerFiller profiler) {
+    protected Map<Identifier, LoadedWasmModule> prepare(ResourceManager manager, @NotNull ProfilerFiller profiler) {
         Map<Identifier, LoadedWasmModule> result = new HashMap<>();
 
         Map<Identifier, Resource> resources = manager.listResources(
@@ -90,7 +91,7 @@ public class WasmCodeLoader extends SimplePreparableReloadListener<Map<Identifie
      * MAIN THREAD: swap in the freshly prepared map.
      */
     @Override
-    protected void apply(Map<Identifier, LoadedWasmModule> prepared, ResourceManager manager, ProfilerFiller profiler) {
+    protected void apply(Map<Identifier, LoadedWasmModule> prepared, @NotNull ResourceManager manager, @NotNull ProfilerFiller profiler) {
         this.modules = Collections.unmodifiableMap(prepared);
         WasmPacks.LOGGER.info("[WasmPacks] Applied {} wasm module(s)", this.modules.size());
     }

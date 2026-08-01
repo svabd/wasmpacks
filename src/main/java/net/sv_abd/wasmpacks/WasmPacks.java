@@ -11,6 +11,7 @@ import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.AddServerReloadListenersEvent;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
+import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import net.sv_abd.wasmpacks.debug.WasmPacksDebugCommand;
 import net.sv_abd.wasmpacks.entrypoint.EntryPointDispatcher;
@@ -138,17 +139,17 @@ public class WasmPacks {
         Identifier simpleRegistryApplierId = Identifier.fromNamespaceAndPath(MOD_ID, "simple_registry_applier");
         event.addListener(
                 simpleRegistryApplierId,
-                new net.minecraft.server.packs.resources.SimplePreparableReloadListener<Void>() {
+                new net.minecraft.server.packs.resources.SimplePreparableReloadListener<@NotNull Void>() {
                     @Override
-                    protected Void prepare(net.minecraft.server.packs.resources.ResourceManager manager,
-                                           net.minecraft.util.profiling.ProfilerFiller profiler) {
+                    protected Void prepare(net.minecraft.server.packs.resources.@NotNull ResourceManager manager,
+                                           net.minecraft.util.profiling.@NotNull ProfilerFiller profiler) {
                         return null; // no off-thread work needed
                     }
 
                     @Override
                     protected void apply(Void prepared,
-                                         net.minecraft.server.packs.resources.ResourceManager manager,
-                                         net.minecraft.util.profiling.ProfilerFiller profiler) {
+                                         net.minecraft.server.packs.resources.@NotNull ResourceManager manager,
+                                         net.minecraft.util.profiling.@NotNull ProfilerFiller profiler) {
                         SimpleRegistryApplier.apply(simpleBlockLoader, simpleItemLoader);
                     }
                 }
@@ -193,17 +194,17 @@ public class WasmPacks {
         // We use an anonymous SimplePreparableReloadListener as a trigger.
         event.addListener(
                 Identifier.fromNamespaceAndPath(MOD_ID, "dispatcher"),
-                new net.minecraft.server.packs.resources.SimplePreparableReloadListener<Void>() {
+                new net.minecraft.server.packs.resources.SimplePreparableReloadListener<@NotNull Void>() {
                     @Override
-                    protected Void prepare(net.minecraft.server.packs.resources.ResourceManager manager,
-                                           net.minecraft.util.profiling.ProfilerFiller profiler) {
+                    protected Void prepare(net.minecraft.server.packs.resources.@NotNull ResourceManager manager,
+                                           net.minecraft.util.profiling.@NotNull ProfilerFiller profiler) {
                         return null; // no off-thread work needed
                     }
 
                     @Override
                     protected void apply(Void prepared,
-                                         net.minecraft.server.packs.resources.ResourceManager manager,
-                                         net.minecraft.util.profiling.ProfilerFiller profiler) {
+                                         net.minecraft.server.packs.resources.@NotNull ResourceManager manager,
+                                         net.minecraft.util.profiling.@NotNull ProfilerFiller profiler) {
                         EntryPointDispatcher.dispatch(wasmCodeLoader, entryPointLoader);
                     }
                 }

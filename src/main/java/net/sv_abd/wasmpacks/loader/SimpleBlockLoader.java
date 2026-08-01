@@ -11,6 +11,7 @@ import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.SimplePreparableReloadListener;
 import net.minecraft.util.profiling.ProfilerFiller;
 import net.sv_abd.wasmpacks.WasmPacks;
+import org.jetbrains.annotations.NotNull;
 
 import java.io.IOException;
 import java.io.Reader;
@@ -37,7 +38,7 @@ import java.util.Set;
  * enforcement) lives in the registration/unfreeze code that consumes
  * {@link #getDefinitions()}.
  */
-public class SimpleBlockLoader extends SimplePreparableReloadListener<Map<Identifier, SimpleBlockDefinition>> {
+public class SimpleBlockLoader extends SimplePreparableReloadListener<@NotNull Map<Identifier, SimpleBlockDefinition>> {
 
     public static final Identifier ID = Identifier.fromNamespaceAndPath(WasmPacks.MOD_ID, "simple_block_loader");
 
@@ -69,7 +70,7 @@ public class SimpleBlockLoader extends SimplePreparableReloadListener<Map<Identi
     // -------------------------------------------------------------------------
 
     @Override
-    protected Map<Identifier, SimpleBlockDefinition> prepare(ResourceManager manager, ProfilerFiller profiler) {
+    protected Map<Identifier, SimpleBlockDefinition> prepare(ResourceManager manager, @NotNull ProfilerFiller profiler) {
         Map<Identifier, SimpleBlockDefinition> result = new HashMap<>();
 
         Map<Identifier, Resource> resources = manager.listResources(
@@ -111,7 +112,7 @@ public class SimpleBlockLoader extends SimplePreparableReloadListener<Map<Identi
     }
 
     @Override
-    protected void apply(Map<Identifier, SimpleBlockDefinition> prepared, ResourceManager manager, ProfilerFiller profiler) {
+    protected void apply(Map<Identifier, SimpleBlockDefinition> prepared, @NotNull ResourceManager manager, @NotNull ProfilerFiller profiler) {
         this.definitions = Collections.unmodifiableMap(prepared);
         WasmPacks.LOGGER.info("[WasmPacks] Applied {} simple block definition(s)", this.definitions.size());
     }

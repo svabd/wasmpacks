@@ -16,6 +16,7 @@ import net.sv_abd.wasmpacks.entrypoint.McFunctionEntryPointType;
 import net.sv_abd.wasmpacks.entrypoint.WasmFunctionRegistry;
 import net.sv_abd.wasmpacks.loader.EntryPointDefinition;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -48,7 +49,7 @@ public class WasmFunctionDispatcher {
 
         SuggestionProvider<CommandSourceStack> wasmFunctionSuggestions = (ctx, builder) ->
                 SharedSuggestionProvider.suggestResource(
-                        WasmFunctionRegistry.getAll().keySet().stream().collect(Collectors.toList()),
+                        new ArrayList<>(WasmFunctionRegistry.getAll().keySet()),
                         builder
                 );
 
