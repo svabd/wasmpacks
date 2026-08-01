@@ -1,10 +1,17 @@
 package net.sv_abd.wasmpacks.registry;
 
+import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
+import net.minecraft.core.component.DataComponentMap;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.Rarity;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
@@ -15,6 +22,7 @@ import net.sv_abd.wasmpacks.loader.SimpleBlockLoader;
 import net.sv_abd.wasmpacks.loader.SimpleItemDefinition;
 import net.sv_abd.wasmpacks.loader.SimpleItemLoader;
 import net.sv_abd.wasmpacks.mixin.MappedRegistryAccessor;
+import org.jetbrains.annotations.NotNull;
 
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -108,7 +116,14 @@ public final class SimpleRegistryApplier {
             SoundType sound = SimpleRegistryResolver.resolveSound(def.sound());
             MapColor mapColor = SimpleRegistryResolver.resolveMapColor(def.mapColor());
 
+            // Since MC 1.21.2, Block/Item construction requires the registry key to be
+            // set on Properties BEFORE construction (Properties#setId) — omitting this
+            // throws NullPointerException("Block/Item id not set"). See NeoForge's 1.21.2
+            // migration primer for the exact pattern this mirrors.
+            ResourceKey<Block> blockKey = ResourceKey.create(Registries.BLOCK, id);
+
             BlockBehaviour.Properties props = BlockBehaviour.Properties.of()
+                    .setId(blockKey)
                     .mapColor(mapColor)
                     .strength(def.hardness(), def.resistance())
                     .sound(sound)
@@ -118,12 +133,22 @@ public final class SimpleRegistryApplier {
             }
 
             Block block = new Block(props);
-            Registry.register(BuiltInRegistries.BLOCK, id, block);
+            Registry.register(BuiltInRegistries.BLOCK, blockKey, block);
             WasmPacks.LOGGER.debug("[WasmPacks] Registered simple block: {}", id);
 
             if (def.blockItem()) {
-                BlockItem blockItem = new BlockItem(block, new Item.Properties());
-                Registry.register(BuiltInRegistries.ITEM, id, blockItem);
+                ResourceKey<Item> itemKey = ResourceKey.create(Registries.ITEM, id);
+                Item.Properties itemProps = new Item.Properties()
+                        .useBlockDescriptionPrefix()
+                        .setId(itemKey);
+                BlockItem blockItem = new BlockItem(block, itemProps);
+                Registry.register(BuiltInRegistries.ITEM, itemKey, blockItem);
+                // See bindItemComponents() doc: the normal component-binding pipeline
+                // runs before our reload listener registers anything, so it never
+                // picks these up on its own — bind manually. BlockItems get plain
+                // defaults (stack 64, no durability, common rarity, not fire resistant)
+                // since simple_blocks JSON doesn't currently expose these for the item side.
+                bindItemComponents(blockItem, id, "block", 64, 0, Rarity.COMMON);
                 WasmPacks.LOGGER.debug("[WasmPacks] Registered auto BlockItem for: {}", id);
             }
             return true;
@@ -144,7 +169,9 @@ public final class SimpleRegistryApplier {
                 return false;
             }
 
+            ResourceKey<@NotNull Item> itemKey = ResourceKey.create(Registries.ITEM, id);
             Item.Properties props = new Item.Properties()
+                    .setId(itemKey)
                     .stacksTo(def.maxStackSize())
                     .rarity(SimpleRegistryResolver.resolveRarity(def.rarity()));
             if (def.maxDurability() > 0) {
@@ -155,12 +182,82 @@ public final class SimpleRegistryApplier {
             }
 
             Item item = new Item(props);
-            Registry.register(BuiltInRegistries.ITEM, id, item);
+            Registry.register(BuiltInRegistries.ITEM, itemKey, item);
+            bindItemComponents(item, id, "item", def.maxStackSize(), def.maxDurability(),
+                    SimpleRegistryResolver.resolveRarity(def.rarity()));
             WasmPacks.LOGGER.debug("[WasmPacks] Registered simple item: {}", id);
             return true;
         } catch (Exception e) {
             WasmPacks.LOGGER.error("[WasmPacks] Failed to register simple item {}: {}", id, e.getMessage());
             return false;
+        }
+    }
+
+    /**
+     * Manually binds the item's {@link DataComponentMap} onto its registry
+     * {@link Holder.Reference}, bypassing vanilla's normal pending-initializer
+     * pipeline.
+     *
+     * WHY THIS IS NEEDED: Item's constructor doesn't bind components directly —
+     * it stashes a pending initializer into BuiltInRegistries.DATA_COMPONENT_INITIALIZERS,
+     * which ReloadableServerResources later applies via
+     * updateComponentsAndStaticRegistryTags() -> this.newComponents.forEach(...).
+     * That `newComponents` list is built when ReloadableServerResources itself is
+     * constructed, BEFORE our reload listener runs and registers anything — so
+     * our items' pending initializers are never in the batch that gets applied,
+     * and Holder.Reference#components() would otherwise throw
+     * "Components not bound yet" the moment anything reads it (which NeoForge's
+     * own startup code does, unconditionally, for every item).
+     *
+     * We start from DataComponents.COMMON_ITEM_COMPONENTS (the same base every
+     * normal item gets via Item.Properties()'s default componentInitializer),
+     * then layer on ITEM_NAME/ITEM_MODEL (which is what actually makes the item
+     * display a name at all — without ITEM_NAME bound, the item has no name
+     * component whatsoever, which renders as blank, not as a raw translation key)
+     * and the stack size/durability/rarity we already exposed via JSON.
+     *
+     * RISK NOTE: none of this is verified against actual 26.2 sources beyond
+     * what's been confirmed through real compile errors and behavior reports so
+     * far. Failure here is caught and logged, not fatal to the overall
+     * registration pass — but an item that fails to bind will likely still show
+     * blank/wrong until corrected.
+     */
+    /**
+     * Inlined equivalent of vanilla's Util.makeDescriptionId(type, id), which
+     * has been "type + '.' + namespace + '.' + path.replace('/', '.')" for a
+     * very long time. Inlined rather than importing Util directly, since we
+     * don't yet know which package it lives in for this MC version (an
+     * earlier attempt to import net.minecraft.Util failed to resolve).
+     */
+    private static String makeDescriptionId(String type, Identifier id) {
+        return type + "." + id.getNamespace() + "." + id.getPath().replace('/', '.');
+    }
+
+    private static void bindItemComponents(Item item, Identifier id, String descriptionPrefix,
+                                            int maxStackSize, int maxDurability, Rarity rarity) {
+        try {
+            Holder<Item> holder = BuiltInRegistries.ITEM.wrapAsHolder(item);
+            if (!(holder instanceof Holder.Reference<Item> ref)) {
+                WasmPacks.LOGGER.warn(
+                        "[WasmPacks] Item holder for {} is not a Holder.Reference, cannot bind components", item);
+                return;
+            }
+            String descriptionId = makeDescriptionId(descriptionPrefix, id);
+            DataComponentMap.Builder builder = DataComponentMap.builder();
+            builder.addAll(DataComponents.COMMON_ITEM_COMPONENTS);
+            builder.set(DataComponents.ITEM_NAME, Component.translatable(descriptionId));
+            builder.set(DataComponents.ITEM_MODEL, id);
+            builder.set(DataComponents.MAX_STACK_SIZE, maxStackSize);
+            if (maxDurability > 0) {
+                builder.set(DataComponents.MAX_DAMAGE, maxDurability);
+            }
+            builder.set(DataComponents.RARITY, rarity);
+            ref.bindComponents(builder.build());
+        } catch (Exception e) {
+            WasmPacks.LOGGER.error(
+                    "[WasmPacks] Failed to bind components for item {} — it will likely be missing correct "
+                            + "name/stack size/durability/rarity data this session. Error: {}",
+                    item, e.getMessage());
         }
     }
 }

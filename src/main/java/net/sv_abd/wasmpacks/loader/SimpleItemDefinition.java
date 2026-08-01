@@ -26,6 +26,9 @@ import net.minecraft.resources.Identifier;
  *                      reorganized into a registry-backed concept in recent MC versions, so
  *                      resolution is deliberately kept out of this plain-data class.
  *   fire_resistant   – Whether the item survives in fire/lava. Defaults to false.
+ *                      NOTE: currently parsed and validated but NOT YET APPLIED at
+ *                      registration (see SimpleRegistryApplier) — resolving it needs
+ *                      RegistryAccess that isn't threaded through yet.
  *
  * The item itself is identified by the Identifier derived from its file path:
  *   data/mymod/wasmpacks/simple_items/pebble.json  ->  Identifier("mymod", "pebble")
