@@ -29,7 +29,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Turns parsed {@link SimpleBlockDefinition}/{@link SimpleItemDefinition}
@@ -63,26 +62,41 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *       no sorting of its own, it trusts the order it's given.</li>
  * </ul>
  *
- * <h2>Why one guard is shared across server and client call sites</h2>
+ * <h2>Why registration is per-identifier idempotent, not a single one-shot latch</h2>
  * In singleplayer, the integrated server and its "client" share a single JVM
  * and a single {@code BuiltInRegistries.BLOCK} instance. If the server-side
  * reload-triggered {@link #apply} call registers these blocks, and the
  * client-side sync-payload handler then also calls {@link #applyOrdered} for
- * the same definitions, the second call would throw on duplicate
- * registration. {@link #APPLIED} is a single process-wide guard specifically
- * so this can't double-fire — whichever call site runs first (in practice,
- * the server-side one, since it runs before any configuration task can be
- * sent) wins, and the other silently no-ops. On a real dedicated server +
- * remote client, these are two separate JVMs with two separate
- * {@code AtomicBoolean}s, so each side still runs its own registration
- * exactly once, independently.
+ * the same definitions, a naive second pass would throw on duplicate
+ * registration.
+ * <p>
+ * An earlier version of this class guarded against that with a single
+ * process-wide {@code AtomicBoolean} that, once tripped, skipped ALL future
+ * registration for the rest of the game process. That over-corrected: a
+ * world load is a brand new server-resource-reload cycle every time (quit to
+ * title, then open a world again — same save or a different one — in the
+ * SAME game launch), and each of those cycles is expected to register
+ * whatever simple blocks/items its own data packs declare. A single
+ * "has this process registered anything, ever" latch means the SECOND (and
+ * every subsequent) world opened in one launch silently registers nothing at
+ * all, even for blocks/items that were never registered by the first world
+ * (different save, updated data pack, etc.) — they simply never appear.
+ * <p>
+ * The correct invariant is per-identifier, not per-process: registering the
+ * same id twice must no-op (that's what actually prevents the duplicate-
+ * registration crash above), but a NEW id introduced by a later world load
+ * must still go through. {@link #registerBlock} / {@link #registerItem}
+ * therefore check {@code BuiltInRegistries#containsKey} themselves and skip
+ * only the individual entries that already exist, rather than relying on one
+ * global flag to skip the entire pass. Whichever call site (server-local
+ * {@link #apply}, or the client sync-payload handler) reaches a given id
+ * first wins; the other sees it already present and moves on. On a real
+ * dedicated server + remote client these are two separate JVMs anyway, so
+ * this is only ever a concern for the shared-JVM singleplayer case.
  */
 public final class SimpleRegistryApplier {
 
     private SimpleRegistryApplier() {}
-
-    /** See class doc — shared across server-local and client-sync call sites. */
-    private static final AtomicBoolean APPLIED = new AtomicBoolean(false);
 
     /**
      * The exact sorted definition lists last registered by THIS process,
@@ -116,8 +130,9 @@ public final class SimpleRegistryApplier {
         sortedItems.sort(Comparator.comparing(e -> e.getKey().toString()));
 
         // Cache regardless of whether applyOrdered actually registers anything
-        // this call (APPLIED may already be tripped) — the sync payload should
-        // reflect what's really live in the registries right now.
+        // new this call (everything here may already be present in the
+        // registries from an earlier world load this process) — the sync
+        // payload should reflect what's really live in the registries right now.
         lastSortedBlocks = sortedBlocks;
         lastSortedItems = sortedItems;
 
@@ -134,18 +149,15 @@ public final class SimpleRegistryApplier {
      * Registers the given definitions IN THE ORDER GIVEN. Callers are
      * responsible for ensuring that order is deterministic and, for
      * multiplayer correctness, identical to whatever order the authoritative
-     * server used. Guarded by {@link #APPLIED} — see class doc.
+     * server used.
+     * <p>
+     * Safe to call once per world load (server-side) AND again for the
+     * client sync handler in the same session — see class doc. Entries whose
+     * id is already present in the relevant registry are skipped
+     * individually; anything new still gets registered.
      */
     public static void applyOrdered(List<Map.Entry<Identifier, SimpleBlockDefinition>> blocks,
                                      List<Map.Entry<Identifier, SimpleItemDefinition>> items) {
-        if (!APPLIED.compareAndSet(false, true)) {
-            WasmPacks.LOGGER.warn(
-                    "[WasmPacks] Simple block/item registration already ran for this process. "
-                            + "Data pack changes to simple_blocks/simple_items require a full restart to take "
-                            + "effect, not just /reload. Skipping.");
-            return;
-        }
-
         // Also cache here, in case applyOrdered is ever called directly
         // (e.g. from the client sync handler) without going through apply().
         lastSortedBlocks = blocks;
@@ -163,20 +175,36 @@ public final class SimpleRegistryApplier {
         itemRegistry.wasmpacks$setFrozen(false);
         try {
             int registeredBlocks = 0;
+            int alreadyPresentBlocks = 0;
             for (Map.Entry<Identifier, SimpleBlockDefinition> entry : blocks) {
-                if (registerBlock(entry.getKey(), entry.getValue())) {
+                Identifier id = entry.getKey();
+                if (BuiltInRegistries.BLOCK.containsKey(id)) {
+                    // Already registered by an earlier world load this process (or by
+                    // the other call site earlier in this same session) — leave it
+                    // alone rather than trying to re-register it.
+                    alreadyPresentBlocks++;
+                    continue;
+                }
+                if (registerBlock(id, entry.getValue())) {
                     registeredBlocks++;
                 }
             }
             int registeredItems = 0;
+            int alreadyPresentItems = 0;
             for (Map.Entry<Identifier, SimpleItemDefinition> entry : items) {
-                if (registerItem(entry.getKey(), entry.getValue())) {
+                Identifier id = entry.getKey();
+                if (BuiltInRegistries.ITEM.containsKey(id)) {
+                    alreadyPresentItems++;
+                    continue;
+                }
+                if (registerItem(id, entry.getValue())) {
                     registeredItems++;
                 }
             }
             WasmPacks.LOGGER.info(
-                    "[WasmPacks] Simple registry pass complete: {} block(s), {} standalone item(s) registered.",
-                    registeredBlocks, registeredItems);
+                    "[WasmPacks] Simple registry pass complete: {} block(s) registered ({} already present), "
+                            + "{} standalone item(s) registered ({} already present).",
+                    registeredBlocks, alreadyPresentBlocks, registeredItems, alreadyPresentItems);
         } finally {
             blockRegistry.wasmpacks$setFrozen(true);
             itemRegistry.wasmpacks$setFrozen(true);

@@ -157,8 +157,12 @@ public class WasmPacks {
 
         // Register the simple block/item loaders (JSON files). These only parse
         // and cache definitions on every reload; the trigger listener below turns
-        // that cached output into real Block/Item registry entries, but only once
-        // per server process (see SimpleRegistryApplier for why).
+        // that cached output into real Block/Item registry entries. Registration
+        // is idempotent per identifier — every world load (not just the first one
+        // this process) runs this, but ids already present in the registry from
+        // an earlier world load this process are left alone (see
+        // SimpleRegistryApplier for why a full one-shot-per-process guard was
+        // wrong here).
         event.addListener(SimpleBlockLoader.ID, simpleBlockLoader);
         event.addListener(SimpleItemLoader.ID, simpleItemLoader);
 

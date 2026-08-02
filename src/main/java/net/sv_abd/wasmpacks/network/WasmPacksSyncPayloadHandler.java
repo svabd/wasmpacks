@@ -10,12 +10,14 @@ import net.sv_abd.wasmpacks.registry.SimpleRegistryApplier;
  * dedicated server, OR the loopback "client" of an integrated
  * (singleplayer) server.
  * <p>
- * In the singleplayer case, {@link SimpleRegistryApplier}'s shared
- * {@code APPLIED} guard (see its class doc) means this call will typically
- * no-op, because the integrated server's own reload-triggered
+ * In the singleplayer case, {@link SimpleRegistryApplier}'s per-identifier
+ * idempotency (see its class doc) means this call will typically register
+ * nothing new, because the integrated server's own reload-triggered
  * {@code SimpleRegistryApplier.apply(...)} call already ran first, in the
- * same JVM/registries. On a real dedicated server + remote client, this is a
- * separate JVM with its own guard, so {@code applyOrdered} actually runs here.
+ * same JVM/registries, and registered everything already. On a real
+ * dedicated server + remote client, this is a separate JVM that hasn't
+ * registered anything yet, so {@code applyOrdered} actually does the real
+ * work here.
  * <p>
  * This class deliberately contains NO client-only imports (no
  * {@code net.minecraft.client...}) — {@code SimpleRegistryApplier.applyOrdered}

@@ -32,11 +32,14 @@ import java.util.Set;
  * NOTE: unlike wasm_code/entry_points, this loader's results are NOT meant to
  * be applied on every /reload. Block/Item are static registries that freeze
  * during mod loading; adding entries to them requires briefly unfreezing the
- * registry, which is only safe to do once, at world load, before any client
- * is connected. This class only does the parsing/bookkeeping side — the
- * actual registration step (and the "once per world load, not per /reload"
- * enforcement) lives in the registration/unfreeze code that consumes
- * {@link #getDefinitions()}.
+ * registry, which is only safe to do at world load, before any client is
+ * connected — not on an in-place {@code /reload} of an already-running world.
+ * This class only does the parsing/bookkeeping side — the actual
+ * registration step (idempotent per block/item id, so it correctly runs
+ * again for every world load in the same game launch without erroring on
+ * ids it already registered) lives in the registration/unfreeze code that
+ * consumes {@link #getDefinitions()}. See {@code SimpleRegistryApplier} for
+ * details.
  */
 public class SimpleBlockLoader extends SimplePreparableReloadListener<@NotNull Map<Identifier, SimpleBlockDefinition>> {
 
