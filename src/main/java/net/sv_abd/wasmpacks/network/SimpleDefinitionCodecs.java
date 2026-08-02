@@ -5,6 +5,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.resources.Identifier;
 import net.sv_abd.wasmpacks.loader.SimpleBlockDefinition;
 import net.sv_abd.wasmpacks.loader.SimpleItemDefinition;
+import org.jetbrains.annotations.NotNull;
 
 /**
  * Hand-written {@link StreamCodec}s for {@link SimpleBlockDefinition} and
@@ -67,7 +68,7 @@ public final class SimpleDefinitionCodecs {
                 }
             };
 
-    public static final StreamCodec<FriendlyByteBuf, SimpleItemDefinition> ITEM =
+    public static final StreamCodec<@NotNull FriendlyByteBuf, @NotNull SimpleItemDefinition> ITEM =
             new StreamCodec<>() {
                 @Override
                 public SimpleItemDefinition decode(FriendlyByteBuf buf) {
@@ -76,6 +77,7 @@ public final class SimpleDefinitionCodecs {
                     int maxDurability = buf.readVarInt();
                     String rarity = buf.readUtf();
                     boolean fireResistant = buf.readBoolean();
+
                     return new SimpleItemDefinition(texture, maxStackSize, maxDurability, rarity, fireResistant);
                 }
 

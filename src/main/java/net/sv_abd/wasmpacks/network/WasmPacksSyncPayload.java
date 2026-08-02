@@ -8,6 +8,7 @@ import net.sv_abd.wasmpacks.WasmPacks;
 import net.sv_abd.wasmpacks.loader.SimpleBlockDefinition;
 import net.sv_abd.wasmpacks.loader.SimpleItemDefinition;
 import net.sv_abd.wasmpacks.registry.SimpleRegistryApplier;
+import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -32,10 +33,10 @@ public record WasmPacksSyncPayload(List<BlockEntry> blocks, List<ItemEntry> item
     public record BlockEntry(Identifier id, SimpleBlockDefinition definition) {}
     public record ItemEntry(Identifier id, SimpleItemDefinition definition) {}
 
-    public static final Type<WasmPacksSyncPayload> TYPE =
+    public static final Type<@NotNull WasmPacksSyncPayload> TYPE =
             new Type<>(Identifier.fromNamespaceAndPath(WasmPacks.MOD_ID, "sync"));
 
-    public static final StreamCodec<FriendlyByteBuf, WasmPacksSyncPayload> CODEC =
+    public static final StreamCodec<@NotNull FriendlyByteBuf, @NotNull WasmPacksSyncPayload> CODEC =
             new StreamCodec<>() {
                 @Override
                 public WasmPacksSyncPayload decode(FriendlyByteBuf buf) {
@@ -75,7 +76,7 @@ public record WasmPacksSyncPayload(List<BlockEntry> blocks, List<ItemEntry> item
             };
 
     @Override
-    public Type<? extends CustomPacketPayload> type() {
+    public @NotNull Type<? extends @NotNull CustomPacketPayload> type() {
         return TYPE;
     }
 

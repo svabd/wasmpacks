@@ -5,6 +5,7 @@ import net.minecraft.core.IdMapper;
 import net.minecraft.core.Registry;
 import net.minecraft.core.component.DataComponentMap;
 import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.component.TypedDataComponent;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
@@ -19,10 +20,7 @@ import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.MapColor;
 import net.sv_abd.wasmpacks.WasmPacks;
-import net.sv_abd.wasmpacks.loader.SimpleBlockDefinition;
-import net.sv_abd.wasmpacks.loader.SimpleBlockLoader;
-import net.sv_abd.wasmpacks.loader.SimpleItemDefinition;
-import net.sv_abd.wasmpacks.loader.SimpleItemLoader;
+import net.sv_abd.wasmpacks.loader.*;
 import net.sv_abd.wasmpacks.mixin.BlockStateIdMapperAccessor;
 import net.sv_abd.wasmpacks.mixin.MappedRegistryAccessor;
 import org.jetbrains.annotations.NotNull;
@@ -225,16 +223,12 @@ public final class SimpleRegistryApplier {
             Block block = new Block(props);
             Registry.register(BuiltInRegistries.BLOCK, blockKey, block);
 
-            // NEW: give every possible state of this block a network id. Without
-            // this, BuiltInRegistries.BLOCK knows the block, but any packet
-            // encoding/decoding one of its BlockStates (e.g. block_update) has
-            // no id to serialize it as, and throws EncoderException/
-            // DecoderException. See BlockStateIdMapperAccessor for details.
-            //
-            // Iterated via getStateDefinition().getPossibleStates() rather than
-            // assuming "just the default state" — simple blocks have no custom
-            // Property<T> today, so this is currently always exactly one state,
-            // but stays correct if that changes later.
+            // 1. Initialize state cache & occlusion shapes
+            for (BlockState state : block.getStateDefinition().getPossibleStates()) {
+                state.initCache();
+            }
+
+            // 2. Register states with the network ID mapper (single loop)
             IdMapper<BlockState> stateIds = BlockStateIdMapperAccessor.wasmpacks$getBlockStateRegistry();
             int statesAdded = 0;
             for (BlockState state : block.getStateDefinition().getPossibleStates()) {
@@ -249,11 +243,14 @@ public final class SimpleRegistryApplier {
             if (def.blockItem()) {
                 ResourceKey<@NotNull Item> itemKey = ResourceKey.create(Registries.ITEM, id);
                 Item.Properties itemProps = new Item.Properties()
-                        .useBlockDescriptionPrefix()
-                        .setId(itemKey);
+                    .useBlockDescriptionPrefix()
+                    .setId(itemKey);
                 BlockItem blockItem = new BlockItem(block, itemProps);
                 Registry.register(BuiltInRegistries.ITEM, itemKey, blockItem);
-                bindItemComponents(blockItem, id, "block", 64, 0, Rarity.COMMON);
+
+                // Fixed: Added the 7th argument (null or DataComponentMap.EMPTY)
+                bindItemComponents(blockItem, id, "block", 64, 0, Rarity.COMMON, null);
+
                 WasmPacks.LOGGER.debug("[WasmPacks] Registered auto BlockItem for: {}", id);
             }
             return true;
@@ -283,10 +280,17 @@ public final class SimpleRegistryApplier {
                 props = props.fireResistant();
             }
 
+            // Apply custom components directly to properties
+            if (def.dataComponents() != null) {
+                for (TypedDataComponent<?> component : def.dataComponents()) {
+                    applyComponent(props, component);
+                }
+            }
+
             Item item = new Item(props);
             Registry.register(BuiltInRegistries.ITEM, itemKey, item);
             bindItemComponents(item, id, "item", def.maxStackSize(), def.maxDurability(),
-                    SimpleRegistryResolver.resolveRarity(def.rarity()));
+                    SimpleRegistryResolver.resolveRarity(def.rarity()), def.dataComponents());
             WasmPacks.LOGGER.debug("[WasmPacks] Registered simple item: {}", id);
             return true;
         } catch (Exception e) {
@@ -295,12 +299,9 @@ public final class SimpleRegistryApplier {
         }
     }
 
-    private static String makeDescriptionId(String type, Identifier id) {
-        return type + "." + id.getNamespace() + "." + id.getPath().replace('/', '.');
-    }
-
     private static void bindItemComponents(Item item, Identifier id, String descriptionPrefix,
-                                            int maxStackSize, int maxDurability, Rarity rarity) {
+                                           int maxStackSize, int maxDurability, Rarity rarity,
+                                           DataComponentMap customComponents) {
         try {
             Holder<@NotNull Item> holder = BuiltInRegistries.ITEM.wrapAsHolder(item);
             if (!(holder instanceof Holder.Reference<@NotNull Item> ref)) {
@@ -318,12 +319,25 @@ public final class SimpleRegistryApplier {
                 builder.set(DataComponents.MAX_DAMAGE, maxDurability);
             }
             builder.set(DataComponents.RARITY, rarity);
+
+            // Merge custom components using native DataComponentMap iteration
+            if (customComponents != null) {
+                builder.addAll(customComponents);
+            }
+
             ref.bindComponents(builder.build());
         } catch (Exception e) {
             WasmPacks.LOGGER.error(
-                    "[WasmPacks] Failed to bind components for item {} — it will likely be missing correct "
-                            + "name/stack size/durability/rarity data this session. Error: {}",
+                    "[WasmPacks] Failed to bind components for item {} — error: {}",
                     item, e.getMessage());
         }
+    }
+
+    private static <T> void applyComponent(Item.Properties properties, TypedDataComponent<@NotNull T> component) {
+        properties.component(component.type(), component.value());
+    }
+
+    private static String makeDescriptionId(String type, Identifier id) {
+        return type + "." + id.getNamespace() + "." + id.getPath().replace('/', '.');
     }
 }

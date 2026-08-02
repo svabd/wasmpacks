@@ -14,6 +14,7 @@ import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.network.event.RegisterConfigurationTasksEvent;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
+import net.sv_abd.wasmpacks.network.*;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import net.sv_abd.wasmpacks.debug.WasmPacksDebugCommand;
@@ -24,9 +25,6 @@ import net.sv_abd.wasmpacks.loader.EntryPointLoader;
 import net.sv_abd.wasmpacks.loader.SimpleBlockLoader;
 import net.sv_abd.wasmpacks.loader.SimpleItemLoader;
 import net.sv_abd.wasmpacks.loader.WasmCodeLoader;
-import net.sv_abd.wasmpacks.network.WasmPacksSyncPayload;
-import net.sv_abd.wasmpacks.network.WasmPacksSyncPayloadHandler;
-import net.sv_abd.wasmpacks.network.WasmPacksSyncTask;
 import net.sv_abd.wasmpacks.registry.SimpleRegistryApplier;
 
 import java.util.Map;
@@ -93,13 +91,15 @@ public class WasmPacks {
         // Payload *registration* (as opposed to configuration-task registration,
         // which is a per-connection game event further below) happens once, on
         // the mod bus, same lifecycle stage as everything else in this constructor.
-        modEventBus.addListener(this::registerPayloadHandlers);
         // RegisterConfigurationTasksEvent is a mod-bus event too (NOT the game
         // event bus — registering it via NeoForge.EVENT_BUS.register(this) below
         // threw IllegalArgumentException: "... has @SubscribeEvent annotation,
         // but takes an argument that is not valid for this bus" at startup),
         // so it's wired up here explicitly instead of via @SubscribeEvent.
         modEventBus.addListener(this::onRegisterConfigurationTasks);
+
+
+        modEventBus.addListener(this::registerPayloads);
 
         // Register ourselves for server-side game events
         NeoForge.EVENT_BUS.register(this);
@@ -112,6 +112,25 @@ public class WasmPacks {
         EntryPointTypeRegistry.register("mcfunction", mcFunctionType);
 
         LOGGER.info("[WasmPacks] Initialized. Built-in entry point types: mcfunction");
+    }
+
+    private void registerPayloads(final RegisterPayloadHandlersEvent event) {
+        var registrar = event.registrar("1.0.0");
+
+        // 1. Clientbound configuration payload
+        registrar.configurationToClient(
+                WasmPacksSyncPayload.TYPE,
+                WasmPacksSyncPayload.CODEC,
+                WasmPacksSyncPayloadHandler::handle
+        );
+
+        // 2. REQUIRED: Serverbound configuration payload
+        // This resolves the UnsupportedOperationException!
+        registrar.configurationToServer(
+                WasmPacksSyncAckPayload.TYPE,
+                WasmPacksSyncAckPayload.CODEC,
+                WasmPacksSyncAckPayloadHandler::handle
+        );
     }
 
     private void commonSetup(FMLCommonSetupEvent event) {

@@ -5,6 +5,10 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
+import net.minecraft.core.component.DataComponentMap;
+import net.minecraft.core.component.DataComponentType;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.Resource;
 import net.minecraft.server.packs.resources.ResourceManager;
@@ -15,10 +19,7 @@ import org.jetbrains.annotations.NotNull;
 
 import java.io.IOException;
 import java.io.Reader;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 /**
  * Scans all datapacks for files matching:
@@ -160,7 +161,18 @@ public class SimpleItemLoader extends SimplePreparableReloadListener<@NotNull Ma
                 ? json.get("fire_resistant").getAsBoolean()
                 : DEFAULT_FIRE_RESISTANT;
 
-        return new SimpleItemDefinition(texture, maxStackSize, maxDurability, rarity, fireResistant);
+        DataComponentMap dataComponents = null;
+
+        if (json.has("components")) {
+            JsonElement componentsEl = json.get("components");
+            if (componentsEl.isJsonObject()) {
+                dataComponents = parseDataComponents(fileId, componentsEl.getAsJsonObject());
+            } else {
+                WasmPacks.LOGGER.error("[WasmPacks] Simple item {} has non-object 'components' field", fileId);
+            }
+        }
+
+        return new SimpleItemDefinition(texture, maxStackSize, maxDurability, rarity, fireResistant, dataComponents);
     }
 
     // -------------------------------------------------------------------------
@@ -173,5 +185,38 @@ public class SimpleItemLoader extends SimplePreparableReloadListener<@NotNull Ma
 
     public SimpleItemDefinition getDefinition(Identifier id) {
         return definitions.get(id);
+    }
+
+    private static DataComponentMap parseDataComponents(Identifier fileId, JsonObject componentsObj) {
+        DataComponentMap.Builder builder = DataComponentMap.builder();
+
+        for (Map.Entry<String, JsonElement> entry : componentsObj.entrySet()) {
+            String key = entry.getKey();
+            Identifier componentId;
+            try {
+                componentId = Identifier.parse(key);
+            } catch (Exception e) {
+                WasmPacks.LOGGER.error("[WasmPacks] Invalid component identifier '{}' in {}", key, fileId);
+                continue;
+            }
+
+            // Retrieve type from registry
+            DataComponentType<?> type = BuiltInRegistries.DATA_COMPONENT_TYPE.getValue(componentId);
+            if (type == null) {
+                WasmPacks.LOGGER.error("[WasmPacks] Unknown DataComponentType '{}' in {}", componentId, fileId);
+                continue;
+            }
+
+            // Decode value using type's codec and add directly to builder
+            parseAndSetComponent(builder, type, entry.getValue(), componentId, fileId);
+        }
+
+        return builder.build();
+    }
+
+    private static <T> void parseAndSetComponent(DataComponentMap.Builder builder, DataComponentType<T> type, JsonElement json, Identifier componentId, Identifier fileId) {
+        type.codec().parse(com.mojang.serialization.JsonOps.INSTANCE, json)
+                .resultOrPartial(err -> WasmPacks.LOGGER.error("[WasmPacks] Failed to parse component '{}' in {}: {}", componentId, fileId, err))
+                .ifPresent(val -> builder.set(type, val));
     }
 }
